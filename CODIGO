@@ -1,0 +1,100 @@
+from machine import Pin, I2C
+import utime
+
+# Configuración del bus I2C para el LCD
+i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=100000)
+
+# Clase para manejar el LCD 20x4
+class LCD:
+    def _init_(self, i2c):
+        self.i2c = i2c
+        devices = i2c.scan()
+        if not devices:
+            raise Exception("No se encontró un dispositivo I2C")
+        self.LCD_I2C_ADDR = devices[0]
+        self.BK = 0x08  # Backlight activado
+        self.init_lcd()
+
+    def init_lcd(self):
+        self.command(0x33)  # Inicialización
+        self.command(0x32)  # Configuración en modo 4 bits
+        self.command(0x28)  # LCD 4 bits, 2 líneas (también válido para 4 líneas)
+        self.command(0x0C)  # LCD encendido, cursor apagado
+        self.command(0x06)  # Auto incremento
+        self.command(0x01)  # Limpiar pantalla
+        utime.sleep_ms(2)
+
+    def command(self, cmd):
+        self.send(cmd, 0)
+
+    def data(self, data):
+        self.send(data, 1)
+
+    def send(self, value, mode):
+        high = (value & 0xF0) | self.BK | mode
+        low = ((value << 4) & 0xF0) | self.BK | mode
+        self.i2c.writeto(self.LCD_I2C_ADDR, bytearray([high | 0x04, high, low | 0x04, low]))
+        utime.sleep_us(50)
+
+    def puts(self, text, line=0):
+        # Configurar la dirección de memoria para cada línea
+        if line == 0:
+            self.command(0x80)  # Primera fila
+        elif line == 1:
+            self.command(0xC0)  # Segunda fila
+        elif line == 2:
+            self.command(0x94)  # Tercera fila
+        elif line == 3:
+            self.command(0xD4)  # Cuarta fila
+        else:
+            raise ValueError("Línea no válida (0-3)")
+        
+        for char in text[:20]:  # Asegúrate de que el texto no exceda 20 caracteres
+            self.data(ord(char))
+
+    def clear(self):
+        self.command(0x01)
+        utime.sleep_ms(2)
+
+# Inicializar el LCD
+lcd = LCD(i2c)
+
+# Pines del sensor ultrasónico
+trigger = Pin(15, Pin.OUT)
+echo = Pin(14, Pin.IN)
+
+# Función para medir la distancia
+def medir_distancia():
+    trigger.high()
+    utime.sleep_us(10)  # Pulso de 10 microsegundos
+    trigger.low()
+
+    start = utime.ticks_us()
+    while echo.value() == 0:
+        if utime.ticks_diff(utime.ticks_us(), start) > 100000:  # Timeout de 100ms
+            return -1  # Sin respuesta
+
+    start = utime.ticks_us()
+    while echo.value() == 1:
+        if utime.ticks_diff(utime.ticks_us(), start) > 100000:  # Timeout de 100ms
+            return -1  # Sin respuesta
+
+    duracion = utime.ticks_diff(utime.ticks_us(), start)
+    distancia = (duracion * 0.0343) / 2  # Fórmula de distancia en cm
+    return distancia
+
+# Bucle principal
+while True:
+    distancia = medir_distancia()
+    lcd.clear()
+    lcd.puts("Medidor de Distancia", 0)  # Título en la primera fila
+    
+    if distancia == -1:
+        lcd.puts("Error: No hay eco", 1)  # Mensaje de error en la segunda fila
+    else:
+        lcd.puts("Distancia medida:", 1)  # Mensaje en la segunda fila
+        lcd.puts("{:.2f} cm".format(distancia), 2)  # Distancia en la tercera fila
+    
+    # Mensaje adicional en la cuarta fila
+    lcd.puts("Actualizando...", 3)
+    utime.sleep(1)  # Esperar 1 segundo antes de medir de nuevo
